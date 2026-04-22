@@ -23,17 +23,17 @@ A fully autonomous maze-solving robot implemented entirely in **synthesizable Ve
 ### Turns & U-Turns
 > The robot detects junctions via IR sensors, centers itself, and executes arc turns with P-controlled deceleration. U-turns use point-turn (in-place rotation) after aligning to the corridor center.
 
-<video src="demos/turns_and_uturns.mp4" controls width="640"></video>
+https://github.com/user-attachments/assets/a144096b-928d-4b18-bcd0-fbe8050e7a1b
 
 ### Straight-Line Navigation
 > Outer PD loop keeps the robot centered between walls using 3 ultrasonic sensors. Inner P loop corrects heading drift using encoder feedback — the two loops run simultaneously in hardware.
 
-<video src="demos/straight_navigation.mp4" controls width="640"></video>
+https://github.com/user-attachments/assets/db3ad4da-7333-4085-bd8e-ad22f17e8c8b
 
 ### Crash Recovery
 > When the encoder stall detector or sonar slip detector triggers, the FSM reverses 600 ticks, executes a 30° evasion turn, snaps heading to the nearest grid angle, and resumes navigation automatically.
 
-<video src="demos/crash_recovery.mp4" controls width="640"></video>
+https://github.com/user-attachments/assets/5fba521f-146b-40bc-bd9b-dee6c7dc3dc3
 
 ---
 
@@ -279,13 +279,6 @@ maze_solver_final/
 ├── ── Quartus Project ─────────────────────────────────────
 ├── Maze_solver_final.qpf      # Quartus project file
 ├── Maze_solver_final.qsf      # Pin assignments + device settings
-│
-├── ── Demo Videos ─────────────────────────────────────────
-├── demos/
-│   ├── turns_and_uturns.mp4   # Arc turns + U-turn demo
-│   ├── straight_navigation.mp4# Wall-following straight drive
-│   └── crash_recovery.mp4     # Stall detection + auto-recovery
-│
 └── .gitignore
 ```
 
