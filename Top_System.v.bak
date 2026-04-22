@@ -1,0 +1,341 @@
+module Top_System(
+    input  wire        CLOCK_50,
+
+    // Encoder inputs
+    input  wire        ENC_A_L,     // ENA_1 (Left A)
+    input  wire        ENC_B_L,     // ENA_2 (Left B)
+    input  wire        ENC_A_R,     // ENB_1 (Right A)
+    input  wire        ENC_B_R,     // ENB_2 (Right B)
+
+    // Motor driver outputs
+    output wire        MD_ENA,  
+    output wire        MD_IN1,
+    output wire        MD_IN2,
+    output wire        MD_IN3,
+    output wire        MD_IN4,
+    output wire        MD_ENB,
+
+    // Ultrasonic — Echo inputs (async, synchronised inside Ultrasonic.v)
+    input  wire        echo_left,
+    input  wire        echo_front,
+    input  wire        echo_right,
+
+    // Ultrasonic — Trigger outputs
+    output wire        trig_left,
+    output wire        trig_front,
+    output wire        trig_right,
+
+    // IR Sensor inputs (MH Flying Fish)
+    input  wire        ir_in,       // IR sensor 1 (Arduino IO10)
+    input  wire        ir_in_2,     // IR sensor 2 (Arduino IO11)
+    input  wire        ir_in_3,     // IR sensor 3 (subsystem trigger)
+
+    // IR3 Subsystem outputs
+    output wire        servo_pwm_3, // Servo PWM for IR3 subsystem
+    inout  wire        dht_sensor_3,// DHT11 data pin for IR3 subsystem
+    output wire        bt_tx_3,     // Bluetooth UART TX for IR3 subsystem
+    input  wire        bt_rx_3,     // Bluetooth UART RX for START command
+
+    // ADC Soil Moisture Pins
+    output wire        adc_cs_n,
+    output wire        adc_din,
+    input  wire        adc_dout,
+    output wire        adc_sck_out,
+
+    // Debug LEDs (DE0-Nano)
+    output wire [7:0]  LED
+);
+
+    // -------------------------------------------------------
+    // Wire declarations (ALL before any module instantiation)
+    // -------------------------------------------------------
+
+    // Encoder outputs
+	 wire [15:0] dbg_fsm_state;
+     wire [3:0]  dbg_steer;
+    wire signed [31:0] total_ticks_L, total_ticks_R;
+    wire [8:0]         theta_L, theta_R;
+    wire signed [15:0] tick_delta_L, tick_delta_R;
+    wire signed [15:0] tick_delta_fast_L, tick_delta_fast_R;
+    wire               tick_event_L, tick_dir_L;
+    wire               tick_event_R, tick_dir_R;
+    wire               snap_position;
+    wire               snap_min_one;
+
+    // Odometry outputs
+    wire [8:0]          heading;
+    wire signed [7:0]   x_blocks;
+    wire signed [7:0]   y_blocks;
+    wire [15:0]         velocity_mmps;
+    wire signed [15:0]  drift;
+    wire                force_heading_snap;
+    wire [8:0]          snap_target;
+
+    // FSM → motor controller
+    wire [3:0] fsm_speed_L, fsm_speed_R;
+    wire [1:0] fsm_dir_L,   fsm_dir_R;
+
+    // Display BCD
+    wire [3:0] dec_H, dec_T, dec_U;
+    wire [3:0] dec_RH, dec_RT, dec_RU;
+
+    // Ultrasonic distances
+    wire [6:0] dist_left_cm, dist_front_cm, dist_right_cm;
+	 wire signed [15:0] outer_heading_adjust;
+    wire               outer_wall_front;
+	 wire [15:0] abs_spd_L = (tick_delta_fast_L < 0) ? -tick_delta_fast_L : tick_delta_fast_L;
+    wire [15:0] abs_spd_R = (tick_delta_fast_R < 0) ? -tick_delta_fast_R : tick_delta_fast_R;
+
+    // IR Sensor outputs
+    wire ir_object_detected_1;
+    wire ir_detection_pulse_1;
+    wire ir_object_detected_2;
+    wire ir_detection_pulse_2;
+
+    // IR3 subsystem handshake wires
+    wire ir3_object_detected;
+    wire ir3_start;
+    wire ir3_done;
+
+    wire bt_go;
+    wire send_end;
+    wire send_pt_dist;
+    wire send_pt_us;
+    wire bt_stop;
+    wire bt_reset;
+
+    // -------------------------------------------------------
+    // Power-on Reset (auto-deasserts after ~20ms)
+    // -------------------------------------------------------
+    reg [19:0] por_cnt = 20'd0;
+    wire rst_n = (por_cnt == 20'hFFFFF);
+    always @(posedge CLOCK_50) begin
+        if (bt_reset) por_cnt <= 20'd0;
+        else if (!rst_n) por_cnt <= por_cnt + 1;
+    end
+
+    // -------------------------------------------------------
+    // Encoder Processors (one per wheel)
+    // -------------------------------------------------------
+    encoder_processor enc_L (
+        .clk_50(CLOCK_50),
+        .rst_n(rst_n),
+        .enc_a(ENC_B_L),  // A and B swapped to invert direction for Left motor
+        .enc_b(ENC_A_L),
+        .total_ticks(total_ticks_L),
+        .theta(theta_L),
+        .tick_delta(tick_delta_L),
+        .tick_delta_fast(tick_delta_fast_L),
+        .tick_event(tick_event_L),
+        .tick_dir(tick_dir_L)
+    );
+
+    encoder_processor enc_R (
+        .clk_50(CLOCK_50),
+        .rst_n(rst_n),
+        .enc_a(ENC_A_R),
+        .enc_b(ENC_B_R),
+        .total_ticks(total_ticks_R),
+        .theta(theta_R),
+        .tick_delta(tick_delta_R),
+        .tick_delta_fast(tick_delta_fast_R),
+        .tick_event(tick_event_R),
+        .tick_dir(tick_dir_R)
+    );
+
+    // -------------------------------------------------------
+    // Odometry Processor
+    // -------------------------------------------------------
+    odometry_processor #(
+        .WHEEL_BASE_MM(94)    // Measured wheel base
+    ) odom (
+        .clk_50(CLOCK_50),
+        .rst_n(rst_n),
+        .tick_event_L(tick_event_L),
+        .tick_dir_L(tick_dir_L),
+        .tick_delta_L(tick_delta_L),
+        .tick_event_R(tick_event_R),
+        .tick_dir_R(tick_dir_R),
+        .tick_delta_R(tick_delta_R),
+        .heading(heading),
+        .x_blocks(x_blocks),
+        .y_blocks(y_blocks),
+        .velocity_mmps(velocity_mmps),
+        .drift(drift),
+        .force_heading_snap(force_heading_snap),
+        .snap_target(snap_target),
+        .snap_position(snap_position),
+        .snap_min_one(snap_min_one)
+    );
+
+    // -------------------------------------------------------
+    // Test FSM → Motor Control
+    // -------------------------------------------------------
+    test_fsm tfsm (
+        .clk_50(CLOCK_50),
+        .heading(heading),
+        .total_ticks_L(total_ticks_L),
+        .rst_n(rst_n),
+        .dist_left_cm(dist_left_cm),
+        .dist_right_cm(dist_right_cm),
+        .dist_front_cm(dist_front_cm),
+        .ir_object_detected_right(ir_object_detected_1),
+		  .ir_object_detected_left(ir_object_detected_2),
+        .ir3_object_detected(ir3_object_detected),
+        .ir3_done(ir3_done),
+        .ir3_start(ir3_start),
+        .bt_go(bt_go),
+        .bt_stop(bt_stop),
+        .send_end(send_end),
+        .send_pt_dist(send_pt_dist),
+        .send_pt_us(send_pt_us),
+        .outer_heading_adjust(outer_heading_adjust),
+        .outer_wall_front(outer_wall_front),
+        .actual_speed_L(tick_delta_fast_L),
+        .actual_speed_R(tick_delta_fast_R),
+        .speed_L(fsm_speed_L),
+        .speed_R(fsm_speed_R),
+        .dir_L(fsm_dir_L),
+		  .dbg_fsm_state(dbg_fsm_state),
+          .dbg_steer(dbg_steer),
+          .dir_R(fsm_dir_R),
+        .force_heading_snap(force_heading_snap),
+        .snap_target(snap_target),
+        .snap_position(snap_position),
+        .snap_min_one(snap_min_one)
+    );
+
+    motor_controller mc (
+        .CLOCK_50(CLOCK_50),
+        .speed_L(fsm_speed_L), .speed_R(fsm_speed_R),
+        .dir_L(fsm_dir_L),     .dir_R(fsm_dir_R),
+        .ENA(MD_ENA), .IN1(MD_IN1), .IN2(MD_IN2),
+        .IN3(MD_IN3), .IN4(MD_IN4), .ENB(MD_ENB)
+    );
+
+    // -------------------------------------------------------
+    // Ultrasonic Controller
+    // -------------------------------------------------------
+
+    Ultrasonic us_ctrl (
+        .clk(CLOCK_50),
+        .echo_left(echo_left),
+        .echo_front(echo_front),
+        .echo_right(echo_right),
+        .trig_left(trig_left),
+        .trig_front(trig_front),
+        .trig_right(trig_right),
+        // Output distances (No longer driving HEX displays here)
+        .dist_left_cm(dist_left_cm),
+        .dist_front_cm(dist_front_cm),
+        .dist_right_cm(dist_right_cm)
+    );
+
+    // -------------------------------------------------------
+    // IR Sensors (MH Flying Fish) — two sensors, OR logic
+    // -------------------------------------------------------
+    ir_sensor_flying_fish ir_sensor_1 (
+        .clk(CLOCK_50),
+        .rst_n(rst_n),
+        .ir_in(ir_in),
+        .object_detected(ir_object_detected_1),
+        .detection_pulse(ir_detection_pulse_1)
+    );
+
+    ir_sensor_flying_fish ir_sensor_2 (
+        .clk(CLOCK_50),
+        .rst_n(rst_n),
+        .ir_in(ir_in_2),
+        .object_detected(ir_object_detected_2),
+        .detection_pulse(ir_detection_pulse_2)
+    );
+
+    // -------------------------------------------------------
+    // ADC Clock Divider & Soil Moisture Controller
+    // -------------------------------------------------------
+    reg [4:0] adc_clk_div = 0;
+    reg       adc_sck_reg = 0;
+
+    always @(posedge CLOCK_50) begin
+        if (!rst_n) begin
+            adc_clk_div <= 0;
+            adc_sck_reg <= 0;
+        end else begin
+            if (adc_clk_div >= 24) begin
+                adc_clk_div <= 0;
+                adc_sck_reg <= ~adc_sck_reg;
+            end else begin
+                adc_clk_div <= adc_clk_div + 1;
+            end
+        end
+    end
+    assign adc_sck_out = adc_sck_reg;
+
+    wire [1:0] moisture_status;
+    wire [7:0] soil_data_char = (moisture_status == 2'b01) ? 8'd77 : 8'd68; // 'M' : 'D'
+    wire [11:0] raw_adc_val;
+
+    adc_controller adc_inst (
+        .dout(adc_dout),
+        .adc_sck(adc_sck_reg),
+        .adc_cs_n(adc_cs_n),
+        .din(adc_din),
+        .d_out_ch0(raw_adc_val),   // Passing 12-bit value
+        .led_ind(),     // Unused LED output
+        .moisture_status(moisture_status)
+    );
+
+    // -------------------------------------------------------
+    // IR3 + Servo + DHT/BT Independent Subsystem
+    // -------------------------------------------------------
+    ir3_servo_bt_subsystem ir3_sub (
+        .CLOCK_50      (CLOCK_50),
+        .rst_n              (rst_n),
+        .ir_in_3            (ir_in_3),
+        .servo_pwm_3        (servo_pwm_3),
+        .dht_sensor_3       (dht_sensor_3),
+        .bt_rx_3            (bt_rx_3),
+        .bt_tx_3            (bt_tx_3),
+        .bt_go              (bt_go),
+        .deadend_count      (),            // Used internally by dht_bluetooth
+        .soil_data_char     (soil_data_char),
+        .adc_val            (raw_adc_val),
+        .bt_stop            (bt_stop),
+        .bt_reset           (bt_reset),
+        .ext_start          (ir3_start),
+        .send_end           (send_end),
+        .send_pt_dist       (send_pt_dist),
+        .send_pt_us         (send_pt_us),
+        .ext_done           (ir3_done),
+        .ir3_object_detected(ir3_object_detected)
+    );
+
+    // -------------------------------------------------------
+    // Outer Loop PD Controller
+    // -------------------------------------------------------
+    
+
+    Outer_Loop_PD #(
+        .TARGET_LEFT_CM(7),
+        .TARGET_RIGHT_CM(7),
+        .MAX_ADJUST_DEG(45)
+    ) outer_loop (
+        .clk_50(CLOCK_50),
+        .rst_n(1'b1),
+        .dist_left_cm(dist_left_cm),
+        .dist_right_cm(dist_right_cm),
+        .dist_front_cm(dist_front_cm),
+        .heading_adjust(outer_heading_adjust),
+        .wall_blocking_front(outer_wall_front)
+    );
+
+    // -------------------------------------------------------
+    // DE0-Nano LED Debugging: Encoder Activity
+    // -------------------------------------------------------
+    // Shows raw encoder ticks counting up/down in binary.
+    // LED[7:4] -> Left Wheel (Top 4 LEDs)
+    // LED[3:0] -> Right Wheel (Bottom 4 LEDs)
+    assign LED[7:4] = total_ticks_L[3:0];
+    assign LED[3:0] = total_ticks_R[3:0];
+
+endmodule

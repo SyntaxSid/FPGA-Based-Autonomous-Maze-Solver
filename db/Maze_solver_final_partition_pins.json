@@ -1,0 +1,149 @@
+{
+	"partitions" : [
+		{
+			"name" : "Top",
+			"pins" : [
+				{
+					"name" : "MD_ENA",
+					"strict" : false
+				},
+				{
+					"name" : "MD_IN1",
+					"strict" : false
+				},
+				{
+					"name" : "MD_IN2",
+					"strict" : false
+				},
+				{
+					"name" : "MD_IN3",
+					"strict" : false
+				},
+				{
+					"name" : "MD_IN4",
+					"strict" : false
+				},
+				{
+					"name" : "MD_ENB",
+					"strict" : false
+				},
+				{
+					"name" : "trig_left",
+					"strict" : false
+				},
+				{
+					"name" : "trig_front",
+					"strict" : false
+				},
+				{
+					"name" : "trig_right",
+					"strict" : false
+				},
+				{
+					"name" : "servo_pwm_3",
+					"strict" : false
+				},
+				{
+					"name" : "bt_tx_3",
+					"strict" : false
+				},
+				{
+					"name" : "adc_cs_n",
+					"strict" : false
+				},
+				{
+					"name" : "adc_sck_out",
+					"strict" : false
+				},
+				{
+					"name" : "LED[0]",
+					"strict" : false
+				},
+				{
+					"name" : "LED[1]",
+					"strict" : false
+				},
+				{
+					"name" : "LED[2]",
+					"strict" : false
+				},
+				{
+					"name" : "LED[3]",
+					"strict" : false
+				},
+				{
+					"name" : "LED[4]",
+					"strict" : false
+				},
+				{
+					"name" : "LED[5]",
+					"strict" : false
+				},
+				{
+					"name" : "LED[6]",
+					"strict" : false
+				},
+				{
+					"name" : "LED[7]",
+					"strict" : false
+				},
+				{
+					"name" : "dht_sensor_3",
+					"strict" : false
+				},
+				{
+					"name" : "CLOCK_50",
+					"strict" : false
+				},
+				{
+					"name" : "ENC_A_R",
+					"strict" : false
+				},
+				{
+					"name" : "ENC_B_R",
+					"strict" : false
+				},
+				{
+					"name" : "ENC_B_L",
+					"strict" : false
+				},
+				{
+					"name" : "ENC_A_L",
+					"strict" : false
+				},
+				{
+					"name" : "echo_left",
+					"strict" : false
+				},
+				{
+					"name" : "echo_front",
+					"strict" : false
+				},
+				{
+					"name" : "echo_right",
+					"strict" : false
+				},
+				{
+					"name" : "adc_dout",
+					"strict" : false
+				},
+				{
+					"name" : "ir_in",
+					"strict" : false
+				},
+				{
+					"name" : "ir_in_2",
+					"strict" : false
+				},
+				{
+					"name" : "ir_in_3",
+					"strict" : false
+				},
+				{
+					"name" : "bt_rx_3",
+					"strict" : false
+				}
+			]
+		}
+	]
+}
