@@ -23,7 +23,7 @@ A fully autonomous maze-solving robot implemented entirely in **synthesizable Ve
 ### Turns & U-Turns
 > The robot detects junctions via IR sensors, centers itself, and executes arc turns with P-controlled deceleration. U-turns use point-turn (in-place rotation) after aligning to the corridor center.
 
-https://github.com/user-attachments/assets/a144096b-928d-4b18-bcd0-fbe8050e7a1b
+https://github.com/user-attachments/assets/5fba521f-146b-40bc-bd9b-dee6c7dc3dc3
 
 ### Straight-Line Navigation
 > Outer PD loop keeps the robot centered between walls using 3 ultrasonic sensors. Inner P loop corrects heading drift using encoder feedback — the two loops run simultaneously in hardware.
@@ -33,7 +33,7 @@ https://github.com/user-attachments/assets/db3ad4da-7333-4085-bd8e-ad22f17e8c8b
 ### Crash Recovery
 > When the encoder stall detector or sonar slip detector triggers, the FSM reverses 600 ticks, executes a 30° evasion turn, snaps heading to the nearest grid angle, and resumes navigation automatically.
 
-https://github.com/user-attachments/assets/5fba521f-146b-40bc-bd9b-dee6c7dc3dc3
+https://github.com/user-attachments/assets/a144096b-928d-4b18-bcd0-fbe8050e7a1b
 
 ---
 
@@ -51,47 +51,40 @@ Most robotics competition entries use a microcontroller (Arduino, STM32) running
 ## 🏗️ System Architecture
 
 ```
-                        ┌─────────────────────────────────┐
-                        │         Top_System.v            │
-                        │       (50 MHz Clock Domain)     │
-                        └──────────────┬──────────────────┘
-                                       │
-           ┌───────────────────────────┼───────────────────────────┐
-           │                           │                           │
-    ╔══════╧══════╗            ╔═══════╧═══════╗           ╔═══════╧═══════╗
-    ║  PERCEPTION ║            ║   CONTROL     ║           ║  ACTUATION    ║
-    ╚══════╤══════╝            ╚═══════╤═══════╝           ╚═══════╤═══════╝
-           │                           │                           │
-  ┌────────┼────────┐         ┌────────┼────────┐         ┌────────┼────────┐
-  │ 3× HC-SR04      │         │ Outer PD Loop   │         │ Motor PWM      │
-  │ Ultrasonic       │────────▶│ (wall-follow)   │         │ Controller     │
-  │ (median-filtered)│         │                 │         │ (500 Hz, 4-bit │
-  └──────────────────┘         │    heading      │         │  duty cycle)   │
-                               │    setpoint     │         └────────────────┘
-  ┌──────────────────┐         │        │        │                 ▲
-  │ 2× IR Sensors    │         │        ▼        │                 │
-  │ (MH Flying Fish) │────────▶│ Heading P Loop  │─────────────────┘
-  │ junction detect  │         │ (encoder-based) │
-  └──────────────────┘         └─────────────────┘
-                                       ▲
-  ┌──────────────────┐                 │
-  │ 2× Quadrature    │                 │
-  │ Encoders (1400   │─────────────────┘
-  │ PPR, 100 Hz)     │
-  └──────────────────┘
+  +---------------------------------------------------------+
+  |                      Top_System.v                      |
+  |                  (50 MHz Clock Domain)                  |
+  +---------------------------------------------------------+
+       |                      |                      |
+  [PERCEPTION]           [CONTROL]             [ACTUATION]
+       |                      |                      |
+  +------------+    +------------------+    +----------------+
+  | 3x HC-SR04 |    | Outer PD Loop    |    | Motor PWM      |
+  | Ultrasonic |───>| (wall-following) |    | Controller     |
+  | (med filt) |    | heading setpoint |    | (500Hz, 4-bit) |
+  +------------+    |        |         |    +----------------+
+                    |        v         |           ^
+  +------------+    | Heading P Loop   |           |
+  | 2x IR      |───>| (encoder-based)  |───────────+
+  | Sensors    |    +------------------+
+  +------------+             ^
+                             |
+  +------------+             |
+  | 2x Quad    |─────────────+
+  | Encoders   |
+  | (1400 PPR) |
+  +------------+
 
-  ┌──────────────────┐         ┌─────────────────┐
-  │ Odometry         │         │ Navigation FSM  │
-  │ Processor        │◀────────│ (17 states,     │
-  │ (heading, X/Y    │────────▶│  840 lines)     │
-  │  grid coords)    │         └─────────────────┘
-  └──────────────────┘
+  +------------------+       +------------------+
+  | Odometry         |<------| Navigation FSM   |
+  | Processor        |------>| (17 states)      |
+  | (heading, X/Y)   |       +------------------+
+  +------------------+
 
-  ┌──────────────────────────────────────────────┐
-  │ IR3 Subsystem (dead-end docking)             │
-  │ IR3 sensor → Servo dip → DHT11 read →       │
-  │ Soil moisture ADC → Bluetooth TX             │
-  └──────────────────────────────────────────────┘
+  +----------------------------------------------+
+  | IR3 Subsystem (dead-end docking)             |
+  | IR3 -> Servo dip -> DHT11 -> Soil ADC -> BT  |
+  +----------------------------------------------+
 ```
 
 ### Cascaded Control Loop
@@ -154,47 +147,34 @@ The `test_fsm.v` implements a **left-wall-following** algorithm with these key b
 ### State Machine Overview
 
 ```
-                         ┌──────────┐
-                  BT     │  S_IDLE  │
-                START───▶│          │
-                         └────┬─────┘
-                              │
-                         ┌────▼─────┐
-                         │ SEQ_INIT │ Anchor heading, start hunting
-                         └────┬─────┘
-                              │
-                   ┌──────────▼──────────┐
-                   │     SEQ_FWD         │◀──────────────────────────┐
-                   │  (Hunt Mode)        │                           │
-                   │  Drive straight,    │                           │
-                   │  outer loop active  │                           │
-                   └──┬────┬────┬───┬────┘                           │
-                      │    │    │   │                                │
-              Junction│    │    │   │Dead-end                        │
-              detected│    │    │   │(front<12cm)                    │
-                      │    │    │   │                                │
-                 ┌────▼──┐ │  ┌▼───▼────┐                           │
-                 │PRE_   │ │  │UTURN_   │                           │
-                 │TURN   │ │  │STOP     │                           │
-                 │(center│ │  │Sample   │                           │
-                 │on jnc)│ │  │sensors  │                           │
-                 └──┬────┘ │  └────┬────┘                           │
-                    │      │       │                                │
-           ┌────────▼──┐   │  ┌────▼─────┐   ┌──────────┐          │
-           │ Direction │   │  │UTURN_    │   │IR3_ACTIVE│          │
-           │ Decision  │   │  │CENTER   │   │Servo dip │          │
-           │L > F > R  │   │  │Align +  │   │DHT + BT  │          │
-           └─┬───┬───┬─┘   │  │center   │   └────┬─────┘          │
-             │   │   │     │  └────┬────┘        │               │
-         Left│Fwd│Right    │       │              │               │
-             │   │   │     │  ┌────▼─────┐        │               │
-        ┌────▼┐  │ ┌─▼───┐│  │POINT_    │◀───────┘               │
-        │ARC  │  │ │ARC  ││  │TURN      │                        │
-        │TURN │  │ │TURN ││  │(180° U)  │                        │
-        └──┬──┘  │ └──┬──┘│  └────┬─────┘                        │
-           │     │    │   │       │                               │
-           └─────┴────┴───┴───────┴──────▶ SEQ_DONE ─────────────┘
-                                           (re-enter hunt mode)
+  BT START
+      |
+  [S_IDLE]
+      |
+  [SEQ_INIT] -- Anchor heading, reset flags
+      |
+  [SEQ_FWD (Hunt Mode)] <--------------------------------+
+  Drive straight, outer PD loop active                  |
+      |          |          |          |                 |
+  Junction   IR3 obj    Front<12cm  Enc stall            |
+  detected   detected   (dead-end)  (crash)              |
+      |          |          |          |                 |
+  [PRE_TURN] [IR3_ACTIVE] [UTURN_STOP] [BUMP_REVERSE]   |
+  Center     Servo dip    Sample IRs   Reverse 600t      |
+  on junc    DHT + BT     2s pause     30deg turn        |
+      |          |          |          |                 |
+  [Decision] [UTURN_    [UTURN_    [POINT_TURN]          |
+  L > F > R   CENTER]    CENTER]   Evasion turn          |
+      |       Arc+align  Arc+align      |                |
+    L | F | R     |          |          |                |
+      |   |   [UTURN_POST_ALIGN]        |                |
+  [ARC] [FWD]      |                   |                |
+  turn  straight  [POINT_TURN]         |                |
+      |            180 deg U-turn       |                |
+      +------------+-------------------+                |
+                   |                                    |
+               [SEQ_DONE] ----------------------------------+
+               (restart hunt)
 ```
 
 ### Key Decisions at Junctions
