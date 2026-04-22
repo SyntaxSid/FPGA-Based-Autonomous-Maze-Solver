@@ -50,41 +50,31 @@ Most robotics competition entries use a microcontroller (Arduino, STM32) running
 
 ## 🏗️ System Architecture
 
-```
-  +---------------------------------------------------------+
-  |                      Top_System.v                      |
-  |                  (50 MHz Clock Domain)                  |
-  +---------------------------------------------------------+
-       |                      |                      |
-  [PERCEPTION]           [CONTROL]             [ACTUATION]
-       |                      |                      |
-  +------------+    +------------------+    +----------------+
-  | 3x HC-SR04 |    | Outer PD Loop    |    | Motor PWM      |
-  | Ultrasonic |───>| (wall-following) |    | Controller     |
-  | (med filt) |    | heading setpoint |    | (500Hz, 4-bit) |
-  +------------+    |        |         |    +----------------+
-                    |        v         |           ^
-  +------------+    | Heading P Loop   |           |
-  | 2x IR      |───>| (encoder-based)  |───────────+
-  | Sensors    |    +------------------+
-  +------------+             ^
-                             |
-  +------------+             |
-  | 2x Quad    |─────────────+
-  | Encoders   |
-  | (1400 PPR) |
-  +------------+
+```mermaid
+flowchart TD
+    TOP["Top_System.v\n50 MHz Clock Domain"]
 
-  +------------------+       +------------------+
-  | Odometry         |<------| Navigation FSM   |
-  | Processor        |------>| (17 states)      |
-  | (heading, X/Y)   |       +------------------+
-  +------------------+
+    TOP --> PERC[PERCEPTION]
+    TOP --> CTRL[CONTROL]
+    TOP --> ACT[ACTUATION]
 
-  +----------------------------------------------+
-  | IR3 Subsystem (dead-end docking)             |
-  | IR3 -> Servo dip -> DHT11 -> Soil ADC -> BT  |
-  +----------------------------------------------+
+    PERC --> US["3x HC-SR04 Ultrasonic\nMedian-filtered"]
+    PERC --> IR["2x IR Sensors\nMH Flying Fish"]
+    PERC --> ENC["2x Quadrature Encoders\n1400 PPR"]
+
+    US -->|wall distances| OPD["Outer PD Loop\nwall-following @ 20Hz"]
+    IR -->|junction detect| FSM
+    ENC -->|tick events| ODOM["Odometry Processor\nheading · X/Y · velocity"]
+    ENC -->|fast delta| HLC["Heading P Controller\ninner loop @ 100Hz"]
+
+    OPD -->|heading adjust ±35°| HLC
+    ODOM <-->|heading setpoint| FSM["Navigation FSM\n17 states · 840 lines"]
+    HLC -->|PWM L/R| ACT
+
+    ACT --> MOT["Motor PWM Controller\n500 Hz · 4-bit duty"]
+
+    IR3SUB["IR3 Subsystem\nServo · DHT11 · Soil ADC · BT"]
+    FSM <-->|ext_start / ext_done| IR3SUB
 ```
 
 ### Cascaded Control Loop
@@ -146,35 +136,37 @@ The `test_fsm.v` implements a **left-wall-following** algorithm with these key b
 
 ### State Machine Overview
 
-```
-  BT START
-      |
-  [S_IDLE]
-      |
-  [SEQ_INIT] -- Anchor heading, reset flags
-      |
-  [SEQ_FWD (Hunt Mode)] <--------------------------------+
-  Drive straight, outer PD loop active                  |
-      |          |          |          |                 |
-  Junction   IR3 obj    Front<12cm  Enc stall            |
-  detected   detected   (dead-end)  (crash)              |
-      |          |          |          |                 |
-  [PRE_TURN] [IR3_ACTIVE] [UTURN_STOP] [BUMP_REVERSE]   |
-  Center     Servo dip    Sample IRs   Reverse 600t      |
-  on junc    DHT + BT     2s pause     30deg turn        |
-      |          |          |          |                 |
-  [Decision] [UTURN_    [UTURN_    [POINT_TURN]          |
-  L > F > R   CENTER]    CENTER]   Evasion turn          |
-      |       Arc+align  Arc+align      |                |
-    L | F | R     |          |          |                |
-      |   |   [UTURN_POST_ALIGN]        |                |
-  [ARC] [FWD]      |                   |                |
-  turn  straight  [POINT_TURN]         |                |
-      |            180 deg U-turn       |                |
-      +------------+-------------------+                |
-                   |                                    |
-               [SEQ_DONE] ----------------------------------+
-               (restart hunt)
+```mermaid
+flowchart TD
+    BT([BT START command]) --> IDLE[S_IDLE]
+    IDLE --> INIT[SEQ_INIT\nAnchor heading · reset flags]
+    INIT --> FWD
+
+    FWD["SEQ_FWD — Hunt Mode\nDrive straight · outer PD loop active"]
+
+    FWD -->|"Junction detected\n(IR sensor clears)"| PRE["SEQ_PRE_TURN\nCenter robot on junction"]
+    FWD -->|"IR3 object + front < 18cm"| IR3["SEQ_IR3_ACTIVE\nServo dip · DHT11 · BT send"]
+    FWD -->|"Front wall < 12cm\n(dead end)"| USTOP["SEQ_UTURN_STOP\nStop · sample sensors"]
+    FWD -->|Encoder stall| BUMP["SEQ_BUMP_REVERSE\nReverse 600t · 30° evasion"]
+
+    PRE -->|Left open| SETTLE_L[SEQ_SETTLE] --> ARC_L[SEQ_ARC\nArc turn LEFT]
+    PRE -->|Front open| FWD2[SEQ_FWD\nDrive through junction]
+    PRE -->|Right open| SETTLE_R[SEQ_SETTLE] --> ARC_R[SEQ_ARC\nArc turn RIGHT]
+
+    USTOP --> UCTR["SEQ_UTURN_CENTER\nArc back · align heading"]
+    IR3 --> UCTR
+    UCTR --> UPOST[SEQ_UTURN_POST_ALIGN]
+    UPOST --> PT["SEQ_POINT_TURN\n180° U-turn"]
+
+    BUMP --> PT2["SEQ_POINT_TURN\n30° evasion turn"]
+
+    ARC_L --> DONE[SEQ_DONE]
+    ARC_R --> DONE
+    FWD2 --> DONE
+    PT --> DONE
+    PT2 --> DONE
+
+    DONE --> FWD
 ```
 
 ### Key Decisions at Junctions
